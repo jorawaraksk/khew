@@ -1,18 +1,27 @@
 import os
-from flask import Flask
 import threading
-from main import main
+from flask import Flask
+from main import main  # Your Telegram bot main() function
 
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
-    return "Bot is Running!", 200
+    return "Bot is running!", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8000))  # use Render's assigned port
+    # Use Render's PORT if available, otherwise fallback to 8000
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
+    # Start Flask in a background thread
     threading.Thread(target=run_flask).start()
-    main()
+
+    # Start Telegram bot safely with error handling
+    try:
+        print("Starting Telegram bot...")
+        main()
+    except Exception as e:
+        print("Bot failed to start!")
+        print(str(e))
