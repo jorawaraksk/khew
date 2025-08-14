@@ -1,11 +1,13 @@
+import os, subprocess, threading, json, shutil
+from zipfile import ZipFile
+from urllib.parse import urlparse
+from datetime import datetime, timedelta, timezone as dt_timezone
+from pytz import timezone
+from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
-import os, subprocess, time, json, zipfile, requests, threading, shutil
-from datetime import datetime, timedelta, timezone as dt_timezone
-from apscheduler.schedulers.background import BackgroundScheduler
-from pytz import timezone
 
-BOT_TOKEN = "7694418942:AAExss6WeT5Q4EIZLWlidt4JVuLT8fIRS5s"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
 ADMIN_ID = 7107162691
 
 BASE_DIR = "projects"
@@ -18,11 +20,11 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 user_projects = {}
 premium_users = {}
-pending_zip_choice = {}
 
 scheduler = BackgroundScheduler(timezone=timezone('Asia/Kolkata'))
 scheduler.start()
 
+# --- Premium Handling ---
 def load_premium():
     if os.path.exists(PREMIUM_FILE):
         with open(PREMIUM_FILE, "r") as f:
@@ -45,36 +47,30 @@ def is_premium(uid):
         return False
     return True
 
+# --- Run / Stop Projects ---
 def stop_project(uid, filename, bot=None):
     proc = user_projects.get(uid, {}).get(filename)
     if proc:
         proc.kill()
         user_projects[uid].pop(filename, None)
-        proj_dir = os.path.join(BASE_DIR, str(uid), filename)
-        if os.path.exists(proj_dir):
-            shutil.rmtree(proj_dir, ignore_errors=True)
-        logpath = os.path.join(LOG_DIR, f"{uid}_{filename}.txt")
-        if os.path.exists(logpath):
-            os.remove(logpath)
         if bot:
             bot.send_message(chat_id=uid, text=f"💤 Project <b>{filename}</b> auto-terminated.", parse_mode="HTML")
 
-def run_command(uid, command, display_name, update, context, cwd=None):
-    if not is_premium(uid) and len(user_projects.get(uid, {})) >= 3:
-        update.effective_message.reply_text("❌ Free plan limit reached. Max 3 active projects.")
-        return
+def run_command(uid, command, display_name, update, context):
     logpath = os.path.join(LOG_DIR, f"{uid}_{display_name}.txt")
     def execute():
         with open(logpath, "w") as log_file:
-            proc = subprocess.Popen(command, shell=True, cwd=cwd, stdout=log_file, stderr=subprocess.STDOUT)
+            proc = subprocess.Popen(command, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
             user_projects.setdefault(uid, {})
             user_projects[uid][display_name] = proc
+
             if not is_premium(uid):
                 scheduler.add_job(stop_project, 'date',
                     run_date=datetime.now(dt_timezone.utc) + timedelta(minutes=10),
                     args=[uid, display_name, context.bot]
                 )
     threading.Thread(target=execute).start()
+
     update.effective_message.reply_text(
         f"✅ Project <b>{display_name}</b> started.",
         parse_mode="HTML",
@@ -85,6 +81,7 @@ def run_command(uid, command, display_name, update, context, cwd=None):
         ])
     )
 
+# --- Telegram Commands ---
 def start(update: Update, context: CallbackContext):
     uid = update.effective_user.id
     name = update.effective_user.first_name
@@ -109,101 +106,26 @@ def start(update: Update, context: CallbackContext):
 <em>© Powered by PLAY-Z HACKING</em>"""
     context.bot.send_photo(chat_id=uid, photo=image, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-def deploy_github_repo(uid, url, update, context):
-    folder = os.path.join(BASE_DIR, str(uid))
-    os.makedirs(folder, exist_ok=True)
-    proj_name = os.path.basename(url).replace(".git", "")
-    proj_path = os.path.join(folder, proj_name)
-    if os.path.exists(proj_path):
-        shutil.rmtree(proj_path)
-    subprocess.run(f"git clone {url} '{proj_path}'", shell=True)
-    entry = None
-    for candidate in ["main.py", "app.py"]:
-        if os.path.exists(os.path.join(proj_path, candidate)):
-            entry = candidate
-            break
-    if entry:
-        run_command(uid, f"python3 {entry}", proj_name, update, context, cwd=proj_path)
-    else:
-        update.message.reply_text("❌ No main.py or app.py found in the repo.")
-
-def deploy_zip_file(uid, zip_path, update, context):
-    folder = os.path.join(BASE_DIR, str(uid))
-    os.makedirs(folder, exist_ok=True)
-    proj_name = os.path.splitext(os.path.basename(zip_path))[0]
-    proj_path = os.path.join(folder, proj_name)
-    if os.path.exists(proj_path):
-        shutil.rmtree(proj_path)
-    os.makedirs(proj_path, exist_ok=True)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(proj_path)
-    for candidate in ["main.py", "app.py"]:
-        if os.path.exists(os.path.join(proj_path, candidate)):
-            run_command(uid, f"python3 {candidate}", proj_name, update, context, cwd=proj_path)
-            return
-    py_files = [f for f in os.listdir(proj_path) if f.endswith(".py")]
-    if py_files:
-        buttons = [[InlineKeyboardButton(f"▶ {f}", callback_data=f"runzip_{proj_name}_{f}")] for f in py_files]
-        pending_zip_choice[uid] = proj_path
-        update.message.reply_text("Select the Python file to run:", reply_markup=InlineKeyboardMarkup(buttons))
-    else:
-        update.message.reply_text("❌ No Python files found in the ZIP.")
-
+# --- Button Handler ---
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     uid = query.from_user.id
     data = query.data
-    if data == "host_py":
-        query.message.reply_text("📁 Send a .py file to run.")
-    elif data == "deploy_github":
-        query.message.reply_text("📎 Send a GitHub repo link.")
-    elif data == "deploy_zip":
-        query.message.reply_text("🗜 Send a .zip file.")
-    elif data == "my_projects":
-        files = user_projects.get(uid, {})
-        if not files:
-            return query.message.reply_text("❌ No active projects.")
-        buttons = [[InlineKeyboardButton(f"❌ {f}", callback_data=f"terminate_{f}")] for f in files]
-        query.message.reply_text("📁 Active projects:", reply_markup=InlineKeyboardMarkup(buttons))
-    elif data == "terminate_one":
-        files = user_projects.get(uid, {})
-        if not files:
-            return query.message.reply_text("❌ No active projects.")
-        buttons = [[InlineKeyboardButton(f"🛠 Stop {f}", callback_data=f"terminate_{f}")] for f in files]
-        query.message.reply_text("🛠 Select project to terminate:", reply_markup=InlineKeyboardMarkup(buttons))
-    elif data == "terminate_all":
-        if uid != ADMIN_ID:
-            return query.answer("❌ Only admin can use this.")
-        for uid_projects in user_projects.values():
-            for proc in uid_projects.values():
-                proc.kill()
-        user_projects.clear()
-        query.message.reply_text("🧨 All sessions terminated by admin.")
-    elif data == "my_plan":
-        expiry = premium_users.get(str(uid))
-        project_count = len(user_projects.get(uid, {}))
-        if expiry:
-            text = f"""🌟 <b>PREMIUM PLAN ACTIVE</b>
-<b>User ID:</b> <code>{uid}</code>
-<b>Expires on:</b> <code>{expiry}</code>
-<b>Projects:</b> <code>{project_count}</code>"""
-        else:
-            text = f"""🆓 <b>FREE PLAN</b>
-<b>User ID:</b> <code>{uid}</code>
-<b>Active Projects:</b> <code>{project_count}/3</code>"""
-        query.message.reply_text(text, parse_mode="HTML")
-    elif data.startswith("terminate_"):
+
+    if data.startswith("terminate_"):
         filename = data.split("terminate_")[1]
         stop_project(uid, filename, context.bot)
         query.message.reply_text(f"✅ Project <b>{filename}</b> terminated.", parse_mode="HTML")
     elif data.startswith("restart_"):
         filename = data.split("restart_")[1]
-        path = os.path.join(BASE_DIR, str(uid), filename)
-        if os.path.exists(path):
-            for candidate in ["main.py", "app.py"]:
-                if os.path.exists(os.path.join(path, candidate)):
-                    run_command(uid, f"python3 {candidate}", filename, update, context, cwd=path)
-                    return
+        path = None
+        for f in os.listdir(BASE_DIR):
+            full_path = os.path.join(BASE_DIR, f, filename)
+            if os.path.exists(full_path):
+                path = full_path
+                break
+        if path:
+            run_command(uid, f"python3 '{path}'", filename, update, context)
         else:
             query.message.reply_text("❌ File not found.")
     elif data.startswith("log_"):
@@ -214,41 +136,86 @@ def button_handler(update: Update, context: CallbackContext):
                 context.bot.send_document(chat_id=uid, document=f, filename=f"{filename}.log")
         else:
             context.bot.send_message(chat_id=uid, text="❌ Log not found.")
-    elif data.startswith("runzip_"):
-        _, proj_name, file_name = data.split("_", 2)
-        proj_path = pending_zip_choice.get(uid)
-        if proj_path:
-            run_command(uid, f"python3 {file_name}", proj_name, update, context, cwd=proj_path)
-            del pending_zip_choice[uid]
+    elif data.startswith("runzip_") or data.startswith("rungit_"):
+        _, file_uid, filename = data.split("_", 2)
+        file_uid = int(file_uid)
+        # Search folder containing the file
+        full_path = None
+        for f in os.listdir(BASE_DIR):
+            folder_path = os.path.join(BASE_DIR, f)
+            if f.startswith(f"{file_uid}_") and os.path.exists(os.path.join(folder_path, filename)):
+                full_path = os.path.join(folder_path, filename)
+                break
+        if not full_path:
+            return query.message.reply_text("❌ File not found.")
+        run_command(file_uid, f"python3 '{full_path}'", filename, update, context)
+        query.message.reply_text(f"✅ Project <b>{filename}</b> started.", parse_mode="HTML")
 
+# --- Handle Python File ---
 def handle_file(update: Update, context: CallbackContext):
     file = update.message.document
     uid = update.effective_user.id
-    if file.file_name.endswith(".py"):
-        if file.file_size > MAX_FILE_SIZE:
-            return update.message.reply_text("❌ File too large. Max 50MB allowed.")
-        folder = os.path.join(BASE_DIR, str(uid))
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, file.file_name)
-        file.get_file().download(path)
-        run_command(uid, f"python3 {file.file_name}", os.path.splitext(file.file_name)[0], update, context, cwd=folder)
-    elif file.file_name.endswith(".zip"):
-        if file.file_size > MAX_FILE_SIZE:
-            return update.message.reply_text("❌ File too large. Max 50MB allowed.")
-        zip_path = os.path.join(BASE_DIR, file.file_name)
-        file.get_file().download(zip_path)
-        deploy_zip_file(uid, zip_path, update, context)
-    else:
-        update.message.reply_text("❌ Send a valid .py or .zip file only.")
+    if not file.file_name.endswith(".py"):
+        return update.message.reply_text("❌ Send a valid .py file only.")
+    if file.file_size > MAX_FILE_SIZE:
+        return update.message.reply_text("❌ File too large. Max 50MB allowed.")
+    filename = file.file_name
+    path = os.path.join(BASE_DIR, filename)
+    file.get_file().download(path)
+    run_command(uid, f"python3 '{path}'", filename, update, context)
 
-def handle_text(update: Update, context: CallbackContext):
+# --- Handle ZIP ---
+def handle_zip(update: Update, context: CallbackContext):
+    file = update.message.document
+    uid = update.effective_user.id
+    if not file.file_name.endswith(".zip"):
+        return update.message.reply_text("❌ Send a valid .zip file.")
+    if file.file_size > MAX_FILE_SIZE:
+        return update.message.reply_text("❌ ZIP too large. Max 50MB allowed.")
+    zip_path = os.path.join(BASE_DIR, file.file_name)
+    file.get_file().download(zip_path)
+    extract_dir = os.path.join(BASE_DIR, f"{uid}_{file.file_name[:-4]}")
+    os.makedirs(extract_dir, exist_ok=True)
+    try:
+        with ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        py_files = [f for f in os.listdir(extract_dir) if f.endswith(".py")]
+        if not py_files:
+            return update.message.reply_text("❌ No Python files found in ZIP.")
+        if len(py_files) == 1:
+            run_command(uid, f"python3 '{os.path.join(extract_dir, py_files[0])}'", py_files[0], update, context)
+            update.message.reply_text(f"✅ Project <b>{py_files[0]}</b> started automatically.", parse_mode="HTML")
+        else:
+            buttons = [[InlineKeyboardButton(f"🛠 Run {f}", callback_data=f"runzip_{uid}_{f}")] for f in py_files]
+            update.message.reply_text("Select Python file to run:", reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception as e:
+        update.message.reply_text(f"❌ Failed to extract/run ZIP.\nError: {e}")
+
+# --- Handle GitHub ---
+def handle_github(update: Update, context: CallbackContext):
     uid = update.effective_user.id
     text = update.message.text.strip()
-    if text.startswith("http") and "github.com" in text:
-        deploy_github_repo(uid, text, update, context)
-    else:
-        update.message.reply_text("❌ Invalid GitHub URL.")
+    if not text.startswith("https://github.com/"):
+        return update.message.reply_text("❌ Send a valid GitHub repo link.")
+    repo_name = urlparse(text).path.strip("/").split("/")[-1]
+    clone_dir = os.path.join(BASE_DIR, f"{uid}_{repo_name}")
+    try:
+        if os.path.exists(clone_dir):
+            shutil.rmtree(clone_dir)
+        subprocess.check_call(f"git clone '{text}' '{clone_dir}'", shell=True)
+        py_files = [f for f in os.listdir(clone_dir) if f.endswith(".py")]
+        if not py_files:
+            return update.message.reply_text("❌ No Python files found in repo.")
+        if len(py_files) == 1:
+            run_command(uid, f"python3 '{os.path.join(clone_dir, py_files[0])}'", py_files[0], update, context)
+            update.message.reply_text(f"✅ Project <b>{py_files[0]}</b> started automatically.", parse_mode="HTML")
+        else:
+            buttons = [[InlineKeyboardButton(f"🛠 Run {f}", callback_data=f"rungit_{uid}_{f}")] for f in py_files]
+            update.message.reply_text("Select Python file to run:", reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception as e:
+        update.message.reply_text(f"❌ Failed to clone/run repo.\nError: {e}")
 
+# --- Add Premium ---
 def add_premium(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         return update.message.reply_text("❌ Only admin can use this.")
@@ -262,16 +229,15 @@ def add_premium(update: Update, context: CallbackContext):
     except:
         update.message.reply_text("❌ Usage: /add <user_id> <days>")
 
+# --- Main ---
 def main():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("add", add_premium, pass_args=True))
     dp.add_handler(CallbackQueryHandler(button_handler))
-    dp.add_handler(MessageHandler(Filters.document, handle_file))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    dp.add_handler(MessageHandler(Filters.document.mime_type("text/x-python"), handle_file))
+    dp.add_handler(MessageHandler(Filters.document.mime_type("application/zip"), handle_zip))
+    dp.add_handler(MessageHandler(Filters.text & (~Filters.command), handle_github))
     updater.start_polling()
     updater.idle()
-
-if __name__ == "__main__":
-    main()
