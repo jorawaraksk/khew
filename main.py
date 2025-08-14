@@ -7,8 +7,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-ADMIN_ID = 7107162691
+BOT_TOKEN = "6613265810:AAE02TlVelL0lLMpgxkv7cY4Br4Cq6IGDZs"
+ADMIN_ID = 5868426717
 
 BASE_DIR = "projects"
 LOG_DIR = "logs"
