@@ -21,7 +21,7 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = "6613265810:AAE02TlVelL0lLMpgxkv7cY4Br4Cq6IGDZs"
-ADMIN_ID = "5868426717"
+ADMIN_ID = 5868426717
 
 BASE_DIR = "projects"
 LOG_DIR = "logs"
