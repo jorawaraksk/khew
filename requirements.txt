@@ -2,3 +2,4 @@ python-telegram-bot==20.8
 Flask==3.0.3
 pytz==2025.2
 apscheduler==3.11.0
+gunicorn==21.2.0
