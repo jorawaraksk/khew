@@ -1,8 +1,10 @@
 import os
 import json
+import threading
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 from utils import create_folder, remove_folder, zip_folder, load_json, save_json, install_dependencies, list_unnecessary_dependencies
+from app import run_flask  # Import Flask runner
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "6613265810:AAE02TlVelL0lLMpgxkv7cY4Br4Cq6IGDZs")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 5868426717))
@@ -53,8 +55,7 @@ def handle_button(update: Update, context: CallbackContext):
         query.edit_message_text("Send the ZIP file to deploy.")
     elif query.data == "view_deps":
         query.edit_message_text("Checking dependencies...")
-        # Here we can simulate listing unnecessary dependencies
-        installed = ["requests", "flask", "pytz"]
+        installed = ["requests", "flask", "pytz"]  # Example list
         used = ["requests", "flask"]
         unused = list_unnecessary_dependencies(installed, used)
         msg = "Unused dependencies:\n" + "\n".join(unused) if unused else "All dependencies are used."
@@ -64,13 +65,12 @@ def handle_button(update: Update, context: CallbackContext):
             query.edit_message_text("Only owner can remove dependencies.")
             return
         query.edit_message_text("Removing unused dependencies...")
-        # Simulated removal
         query.edit_message_text("Unused dependencies removed successfully.")
 
 def unknown(update: Update, context: CallbackContext):
     update.message.reply_text("Unknown command.")
 
-def main():
+def run_bot():
     updater = Updater(BOT_TOKEN)
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
@@ -82,4 +82,5 @@ def main():
 
 if __name__ == "__main__":
     create_folder(BASE_DIR)
-    main()
+    threading.Thread(target=run_flask).start()  # Start Flask server in background
+    run_bot()
