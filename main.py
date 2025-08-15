@@ -1,10 +1,8 @@
 import os
 import json
-import threading
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, CallbackContext, filters
 from utils import create_folder, remove_folder, zip_folder, load_json, save_json, install_dependencies, list_unnecessary_dependencies
-from app import run_flask  # Import Flask runner
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "6613265810:AAE02TlVelL0lLMpgxkv7cY4Br4Cq6IGDZs")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 5868426717))
@@ -55,7 +53,7 @@ def handle_button(update: Update, context: CallbackContext):
         query.edit_message_text("Send the ZIP file to deploy.")
     elif query.data == "view_deps":
         query.edit_message_text("Checking dependencies...")
-        installed = ["requests", "flask", "pytz"]  # Example list
+        installed = ["requests", "flask", "pytz"]
         used = ["requests", "flask"]
         unused = list_unnecessary_dependencies(installed, used)
         msg = "Unused dependencies:\n" + "\n".join(unused) if unused else "All dependencies are used."
@@ -70,17 +68,16 @@ def handle_button(update: Update, context: CallbackContext):
 def unknown(update: Update, context: CallbackContext):
     update.message.reply_text("Unknown command.")
 
-def run_bot():
+def main():
     updater = Updater(BOT_TOKEN)
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("convert", convert))
     dp.add_handler(CallbackQueryHandler(handle_button))
-    dp.add_handler(MessageHandler(Filters.command, unknown))
+    dp.add_handler(MessageHandler(filters.COMMAND, unknown))
     updater.start_polling()
     updater.idle()
 
 if __name__ == "__main__":
     create_folder(BASE_DIR)
-    threading.Thread(target=run_flask).start()  # Start Flask server in background
-    run_bot()
+    main()
